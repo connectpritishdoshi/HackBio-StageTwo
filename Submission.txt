@@ -10,25 +10,44 @@ Stage Two: Predicting Drug Sensitivity in Cancer (GDSC)
 1. DATASET LOADING AND TARGET DEFINITION
 
 Dataset: GDSC (Genomics of Drug Sensitivity in Cancer)
+Source file: GDSC.xlsx  |  162,103 rows  |  19 columns  |  0 missing values
 
+Step 1 — Load the dataset:
+
+  import pandas as pd
   df = pd.read_excel("GDSC.xlsx")
-  # Rows: 162,103  |  Columns: 19
-  # No missing values — 0 NaN across all rows
+  print(df.shape)                   # Output: (162103, 19)
+  print(df.isnull().sum().sum())    # Output: 0
 
-Prediction target: LN_IC50
+Step 2 — Identify the prediction target:
 
-  y = df["LN_IC50"]   # prediction target
+  The prediction target for this project is LN_IC50.
+  LN_IC50 is a column in the GDSC dataset representing the natural log of IC50 —
+  the drug concentration required to reduce cancer cell viability by 50%.
 
-LN_IC50 is the natural logarithm of IC50 — the drug concentration required to kill
-50% of cancer cells. It is used directly, with no further transformation:
-  - Lower LN_IC50 = drug-sensitive cell line (effective at small doses)
-  - Higher LN_IC50 = drug-resistant cell line (requires large doses)
-  - Mean = 2.82  |  Std = 2.84  |  Min = -8.64  |  Max = 13.82
+  y = df["LN_IC50"]
+  print(y.describe())
 
-LN_IC50 is the target for both tasks:
-  - Regression:      predict the continuous LN_IC50 value directly
-  - Classification:  threshold LN_IC50 at 25th/75th percentiles to produce
-                     Sensitive (0) and Resistant (1) binary labels
+  Output:
+    count    162103.000000
+    mean          2.822644
+    std           2.836231
+    min          -8.642551
+    25%           1.476170
+    50%           3.271447
+    75%           4.767629
+    max          13.820189
+    Name: LN_IC50, dtype: float64
+
+Step 3 — How LN_IC50 is used as the target:
+
+  Regression task:      y = df["LN_IC50"]          (predict continuous value)
+  Classification task:  y = 0 if LN_IC50 <= 1.4762 (Sensitive, bottom 25%)
+                        y = 1 if LN_IC50 >= 4.7676 (Resistant, top 25%)
+
+  Lower LN_IC50 → drug-sensitive cell line (killed at a small dose)
+  Higher LN_IC50 → drug-resistant cell line (requires a large dose)
+  The log transformation is already in GDSC — no further transformation applied.
 
 ---
 
