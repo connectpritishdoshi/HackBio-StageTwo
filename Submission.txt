@@ -309,21 +309,23 @@ def load_and_prepare_data(data_path: str) -> pd.DataFrame:
     print(f"  Loading: {os.path.abspath(data_path)}")
 
     try:
-        df = pd.read_excel(data_path)
+        df = pd.read_excel(data_path)   # loads GDSC.xlsx: 162,103 rows x 19 columns
     except FileNotFoundError:
         print(f"\n  ERROR: Cannot find GDSC.xlsx at {data_path}")
         print("  Either place GDSC.xlsx in data/ or ensure HackBio-StageOne is a sibling folder.")
         sys.exit(1)
 
+    # --- Dataset loading verification ---
     print(f"  Raw dataset: {df.shape[0]:,} rows x {df.shape[1]} columns")
-    print(f"  Columns: {df.columns.tolist()}")
-    print(f"\n  TARGET VARIABLE IDENTIFIED: {COL_LN_IC50}")
-    print(f"    Confirmed present in dataset: {COL_LN_IC50 in df.columns}")
-    print(f"    Type: continuous numeric (natural log of IC50)")
-    print(f"    Used as: regression target (direct) + classification labels (quantile split)")
-    ln_raw = df[COL_LN_IC50]
-    print(f"    Statistics: Mean={ln_raw.mean():.4f}  Std={ln_raw.std():.4f}  "
-          f"Min={ln_raw.min():.4f}  Max={ln_raw.max():.4f}  NaN={ln_raw.isna().sum()}")
+    print(f"  Missing values: {df.isnull().sum().sum()}")
+
+    # --- Prediction target: LN_IC50 ---
+    # LN_IC50 is the natural log of IC50 (drug concentration killing 50% of cells).
+    # It is the single prediction target for both regression and classification tasks.
+    y = df["LN_IC50"]   # prediction target
+    print(f"\n  Prediction target: LN_IC50")
+    print(f"    Present in dataset: {'LN_IC50' in df.columns}")
+    print(f"    Mean={y.mean():.4f}  Std={y.std():.4f}  Min={y.min():.4f}  Max={y.max():.4f}  NaN={y.isna().sum()}")
 
     for raw_col, feat_col in [
         (COL_CNA,         FEAT_CNA),
