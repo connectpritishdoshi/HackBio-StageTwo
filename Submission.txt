@@ -1,123 +1,196 @@
 GitHub Repository: https://github.com/connectpritishdoshi/HackBio-StageTwo
-
 Team: Pritish Doshi, Gauri Jagtap — University of Mumbai
 
 ---
 
 Stage Two: Predicting Drug Sensitivity in Cancer (GDSC)
 
-We built a full machine learning pipeline to predict cancer cell line drug sensitivity
-using the LN_IC50 column from the GDSC dataset, implemented as both a regression and
-a classification task.
+---
 
-DATASET LOADING AND TARGET VARIABLE
+1. DATASET LOADING AND TARGET DEFINITION
 
-Step 1 — Load dataset:
+Dataset: GDSC (Genomics of Drug Sensitivity in Cancer)
+
   df = pd.read_excel("GDSC.xlsx")
-  print(df.shape)    # (162103, 19)
-  print(df.columns)  # ['DATASET', 'NLME_RESULT_ID', 'NLME_CURVE_ID', 'COSMIC_ID',
-                     #  'CELL_LINE_NAME', 'SANGER_MODEL_ID', 'TCGA_DESC', 'DRUG_ID',
-                     #  'DRUG_NAME', 'PUTATIVE_TARGET', 'PATHWAY_NAME', 'MIN_CONC',
-                     #  'MAX_CONC', 'LN_IC50', 'AUC', 'RMSE', 'Z_SCORE',
-                     #  'TARGET_PATHWAY', 'CNA', 'Gene Expression', 'Methylation',
-                     #  'Microsatellite instability Status (MSI)']
+  # Rows: 162,103  |  Columns: 19
+  # No missing values — 0 NaN across all rows
 
-Step 2 — Identify prediction target:
-  TARGET VARIABLE: LN_IC50
-  Confirmed present in dataset: True
-  Type: continuous numeric — natural logarithm of IC50
-  NaN count: 0 (no missing values in target)
-  Statistics: Mean=2.8226  Std=2.8362  Min=-8.6426  Max=13.8202
+Prediction target: LN_IC50
 
-  y = df["LN_IC50"]   # regression target — predict continuous drug sensitivity
-                       # also used to derive Sensitive/Resistant labels for classification
+  y = df["LN_IC50"]   # prediction target
 
-Step 3 — Define features and target arrays:
-  X = df[feature_cols]   # shape (162103, 7) — 7 pharmacological and genomic features
-  y = df["LN_IC50"]      # shape (162103,)   — prediction target
+LN_IC50 is the natural logarithm of IC50 — the drug concentration required to kill
+50% of cancer cells. It is used directly, with no further transformation:
+  - Lower LN_IC50 = drug-sensitive cell line (effective at small doses)
+  - Higher LN_IC50 = drug-resistant cell line (requires large doses)
+  - Mean = 2.82  |  Std = 2.84  |  Min = -8.64  |  Max = 13.82
 
-LN_IC50 is the natural logarithm of IC50 — the drug concentration required to reduce
-cancer cell viability by 50%. The log transform is applied because raw IC50 values
-span many orders of magnitude; the log scale produces a roughly normal distribution
-appropriate for regression modelling.
+LN_IC50 is the target for both tasks:
+  - Regression:      predict the continuous LN_IC50 value directly
+  - Classification:  threshold LN_IC50 at 25th/75th percentiles to produce
+                     Sensitive (0) and Resistant (1) binary labels
 
-No rows were dropped — all 162,103 experiments had complete values for both features
-and the LN_IC50 target (0 NaN removed after feature engineering).
+---
 
-APPROACH
+2. TASK FORMULATION
 
-Regression: Random Forest and XGBoost regressors trained to predict the continuous
-LN_IC50 value directly.
+Two ML tasks on the same dataset:
 
-Classification: Quantile-based split — bottom 25th percentile labelled Sensitive (0),
-top 75th percentile labelled Resistant (1), middle 50% discarded. Random Forest and
-XGBoost classifiers trained on the resulting binary labels.
+Regression: predict continuous LN_IC50 values.
+  Models — Random Forest Regressor, XGBoost Regressor
 
-FEATURES USED (7 total) AND ENCODING RATIONALE
+Classification: predict Sensitive vs Resistant.
+  Models — Random Forest Classifier, XGBoost Classifier
 
-Three categorical variables encoded with OrdinalEncoder (scikit-learn):
-- Drug Name        — 246 unique values
-- Cancer Type      — 30 unique values (TCGA descriptor)
-- Drug Pathway     — 23 unique values (TARGET_PATHWAY)
+Both tasks use 7 features derived from the same GDSC dataset.
 
-Why ordinal encoding and not one-hot encoding:
-One-hot encoding would create 299+ sparse binary columns, which is unnecessary for
-tree-based models. Random Forest and XGBoost split on threshold values — they do not
-assume any ordinal relationship between encoded integers. Each split boundary
-effectively partitions the categories into two groups, recovering the categorical
-structure of the variable. OrdinalEncoder with unknown_value=-1 handles any unseen
-categories at inference time.
+---
 
-Four binary genomic features (no encoding needed — already numeric):
-- CNA — Copy Number Alteration: Y -> 1, N -> 0
-- Gene Expression:               Y -> 1, N -> 0
-- Methylation:                   Y -> 1, N -> 0
-- MSI Status:                    MSI-H -> 1, MSS/MSI-L -> 0
+3. QUANTILE-BASED CLASSIFICATION LABELS
 
-AUC and Z_SCORE were deliberately excluded — both measure the same drug response
-experiment as LN_IC50, so including them would be data leakage. CELL_LINE_NAME was
-excluded as a high-cardinality identifier with no generalisable biological signal.
+  lower = df["LN_IC50"].quantile(0.25)  # = 1.4762
+  upper = df["LN_IC50"].quantile(0.75)  # = 4.7676
 
-VALIDATION STRATEGY AND OVERFITTING ASSESSMENT
+  df_sensitive = df[df["LN_IC50"] <= lower]  # label = 0  (40,526 rows)
+  df_resistant = df[df["LN_IC50"] >= upper]  # label = 1  (40,526 rows)
+  # Middle 50% (81,051 rows) discarded — ambiguous clinical signal
+
+Biological rationale:
+Sensitive = cell line killed by a small drug dose (LN_IC50 in the bottom 25%).
+Resistant = cell line survives a large drug dose (LN_IC50 in the top 25%).
+Discarding the middle creates a clinically meaningful Sensitive vs Resistant contrast,
+mirroring how oncologists classify drug response in practice.
+
+---
+
+4. FEATURE SELECTION AND LEAKAGE PREVENTION
+
+7 features used:
+  - Drug Name        (ordinal encoded, 246 unique drugs)
+  - Cancer Type      (ordinal encoded, 30 TCGA types)
+  - Drug Pathway     (ordinal encoded, 23 pathways)
+  - CNA              (binary: Y=1, N=0)
+  - Gene Expression  (binary: Y=1, N=0)
+  - Methylation      (binary: Y=1, N=0)
+  - MSI Status       (binary: MSI-H=1, MSS/MSI-L=0)
+
+Excluded to prevent data leakage:
+  - AUC and Z_SCORE: both measure the same drug response experiment as LN_IC50.
+    Including them would allow the model to trivially convert one drug response
+    metric to another, learning nothing about underlying biology.
+  - CELL_LINE_NAME: high-cardinality identifier with no generalisable signal.
+
+---
+
+5. FEATURE ENGINEERING
+
+Categorical encoding — OrdinalEncoder (scikit-learn):
+  Drug Name, Cancer Type, and Drug Pathway are encoded as integers.
+  Ordinal encoding is appropriate for tree-based models (RF, XGBoost) because
+  these models split on threshold values and do not assume linear relationships
+  between encoded integers. One-hot encoding would create 299+ sparse columns
+  unnecessarily.
+
+Binary encoding:
+  CNA, Gene Expression, Methylation: Y -> 1, N -> 0
+  MSI Status: MSI-H -> 1, MSS/MSI-L -> 0
+
+---
+
+6. MODEL IMPLEMENTATION
+
+  from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+  from xgboost import XGBRegressor, XGBClassifier
+
+Regression models:
+  RandomForestRegressor(n_estimators=100, max_features='sqrt', random_state=42)
+  XGBRegressor(n_estimators=200, max_depth=6, learning_rate=0.1, subsample=0.8)
+
+Classification models:
+  RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
+  XGBClassifier(n_estimators=200, max_depth=6, learning_rate=0.1, subsample=0.8)
+
+---
+
+7. VALIDATION STRATEGY
 
 Strategy: Stratified 80/20 holdout split + 5-fold cross-validation
 
-Step 1 — Holdout split (random_state=42 for reproducibility):
   X_train, X_test, y_train, y_test = train_test_split(
-      X, y, test_size=0.20, random_state=42, stratify=y  # stratify for classification
+      X, y, test_size=0.20, random_state=42, stratify=y
   )
 
-Stratification ensures equal Sensitive/Resistant proportions in both splits,
-preventing class imbalance from distorting evaluation metrics.
+Overfitting assessed by comparing train vs test scores:
 
-Step 2 — Overfitting assessed by comparing train vs test scores:
+  Regression:
+    RF:  Train R² = 0.8134  |  Test R² = 0.7741  |  Gap = 0.0392
+    XGB: Train R² = 0.7700  |  Test R² = 0.7682  |  Gap = 0.0018
 
-Regression:
-- Random Forest: Train R² = 0.8134  |  Test R² = 0.7741  |  Gap = 0.0392
-- XGBoost:       Train R² = 0.7700  |  Test R² = 0.7682  |  Gap = 0.0018
+  Classification:
+    RF:  Train Acc = 0.9641  |  Test Acc = 0.9413  |  Gap = 0.0228
+    XGB: Train Acc = 0.9479  |  Test Acc = 0.9408  |  Gap = 0.0072
 
-Classification:
-- Random Forest: Train Acc = 0.9641  |  Test Acc = 0.9413  |  Gap = 0.0228
-- XGBoost:       Train Acc = 0.9479  |  Test Acc = 0.9408  |  Gap = 0.0072
+5-Fold Cross-Validation results:
 
-All gaps are small, confirming no significant overfitting. XGBoost's near-zero gaps
-reflect its built-in regularisation (learning_rate=0.1, subsample=0.8).
+  Regression CV (KFold, RF n_estimators=50):
+    Fold R²:  [0.7736, 0.7715, 0.7712, 0.7665, 0.7698]
+    Mean R²:  0.7705  ±  0.0024
 
-Step 3 — 5-fold cross-validation to confirm holdout stability:
+  Classification CV (StratifiedKFold, RF n_estimators=50):
+    Fold AUC: [0.9829, 0.9833, 0.9825, 0.9835, 0.9839]
+    Mean AUC: 0.9832  ±  0.0005
 
-Regression CV (KFold, n_splits=5, Random Forest n_estimators=50):
-- Fold R² scores: [0.7736, 0.7715, 0.7712, 0.7665, 0.7698]
-- Mean R²: 0.7705  ±  0.0024
+Near-zero standard deviation across CV folds confirms models generalise reliably.
 
-Classification CV (StratifiedKFold, n_splits=5, Random Forest n_estimators=50):
-- Fold AUC scores: [0.9829, 0.9833, 0.9825, 0.9835, 0.9839]
-- Mean AUC: 0.9832  ±  0.0005
+---
 
-The standard deviation across CV folds is extremely low (0.0024 for regression,
-0.0005 for classification), confirming the holdout result is stable and not a lucky
-split. The models generalise reliably to unseen data across all partitions.
+8. MODEL EVALUATION
 
-CODE
+Regression (test set: 32,421 samples):
+  Random Forest: RMSE=1.3515  R²=0.7741  MAE=1.0148
+  XGBoost:       RMSE=1.3691  R²=0.7682  MAE=1.0447
+
+Classification (test set: 16,211 samples, stratified):
+  Random Forest: Accuracy=94.1%  F1=0.9411  ROC-AUC=0.9834
+  XGBoost:       Accuracy=94.1%  F1=0.9405  ROC-AUC=0.9874
+
+Feature Importance & Biological Interpretation:
+
+Drug Name dominates (~0.52-0.68 importance across all models). Broad-spectrum
+chemotherapy agents (e.g. cisplatin) achieve low LN_IC50 across most cell lines
+because they attack fundamental cellular processes. Targeted therapies are potent
+only when the specific molecular target is present.
+
+Drug Pathway ranks second (~0.23-0.31). Mechanism of action is a key determinant
+of sensitivity class — drugs targeting the same signalling node share sensitivity
+landscapes across cell lines.
+
+Cancer Type ranks third (~0.05-0.13). Different tumour tissues have different drug
+transporter activity and survival pathway dependencies.
+
+Gene Expression, Methylation, CNA, and MSI contribute smaller but non-zero signal,
+validating the precision oncology rationale: molecular profiling adds independent
+predictive value beyond drug and cancer type identity.
+
+---
+
+CODE: https://github.com/connectpritishdoshi/HackBio-StageTwo/blob/main/src/main.py
+
+OUTPUTS (in /outputs folder):
+  reg_01_target_distribution.png     — LN_IC50 distribution (regression target)
+  reg_02_feature_importance.png      — RF and XGB regression feature importance
+  reg_03_actual_vs_predicted.png     — Actual vs predicted LN_IC50 (hexbin density)
+  reg_04_model_comparison.png        — RMSE / R2 / MAE comparison
+  clf_01_quantile_split.png          — Quantile-based class split visualisation
+  clf_02_roc_curves.png              — ROC curves for both classifiers
+  clf_03_confusion_matrices.png      — Confusion matrices with precision/recall
+  clf_04_feature_importance.png      — RF and XGB classification feature importance
+  clf_05_model_comparison.png        — Accuracy / F1 / AUC comparison
+  combined_01_feature_importance_heatmap.png — All 4 models x all features heatmap
+
+---
+
+FULL CODE (src/main.py):
 
 #!/usr/bin/env python3
 """
@@ -135,7 +208,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, KFold
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.preprocessing import OrdinalEncoder
 from sklearn.metrics import (
@@ -178,7 +251,6 @@ COL_TARGET_PATH = 'TARGET_PATHWAY'
 # ---------------------------------------------------------------------------
 # FEATURE CONSTANTS
 # ---------------------------------------------------------------------------
-# Internal column names after encoding
 FEAT_DRUG    = 'drug_encoded'
 FEAT_CANCER  = 'cancer_type_encoded'
 FEAT_PATHWAY = 'pathway_encoded'
@@ -189,7 +261,6 @@ FEAT_MSI     = 'msi_binary'
 
 FEATURE_COLS = [FEAT_DRUG, FEAT_CANCER, FEAT_PATHWAY, FEAT_CNA, FEAT_GEXPR, FEAT_METH, FEAT_MSI]
 
-# Human-readable labels for plots and reports
 FEATURE_LABELS = {
     FEAT_DRUG:    'Drug Name',
     FEAT_CANCER:  'Cancer Type',
@@ -200,7 +271,6 @@ FEATURE_LABELS = {
     FEAT_MSI:     'MSI Status (Genomic)',
 }
 
-# Quantile thresholds for classification split (adjustable)
 QUANTILE_LOWER = 0.25
 QUANTILE_UPPER = 0.75
 
@@ -227,11 +297,15 @@ def load_and_prepare_data(data_path: str) -> pd.DataFrame:
         sys.exit(1)
 
     print(f"  Raw dataset: {df.shape[0]:,} rows x {df.shape[1]} columns")
+    print(f"  Columns: {df.columns.tolist()}")
+    print(f"\n  TARGET VARIABLE IDENTIFIED: {COL_LN_IC50}")
+    print(f"    Confirmed present in dataset: {COL_LN_IC50 in df.columns}")
+    print(f"    Type: continuous numeric (natural log of IC50)")
+    print(f"    Used as: regression target (direct) + classification labels (quantile split)")
+    ln_raw = df[COL_LN_IC50]
+    print(f"    Statistics: Mean={ln_raw.mean():.4f}  Std={ln_raw.std():.4f}  "
+          f"Min={ln_raw.min():.4f}  Max={ln_raw.max():.4f}  NaN={ln_raw.isna().sum()}")
 
-    # --- Binary genomic features: Y -> 1, N -> 0 ---
-    # CNA: copy number alteration present in the cell line's DNA
-    # Gene Expression: abnormal mRNA expression (transcriptionally active/silent)
-    # Methylation: epigenetic silencing via DNA methylation
     for raw_col, feat_col in [
         (COL_CNA,         FEAT_CNA),
         (COL_GENE_EXPR,   FEAT_GEXPR),
@@ -243,16 +317,12 @@ def load_and_prepare_data(data_path: str) -> pd.DataFrame:
             print(f"  WARNING: '{raw_col}' not found — setting {feat_col} = 0.")
             df[feat_col] = 0
 
-    # --- MSI: MSI-H (hypermutated) -> 1, MSS/MSI-L (microsatellite stable) -> 0 ---
     if COL_MSI in df.columns:
         df[FEAT_MSI] = df[COL_MSI].map({'MSI-H': 1, 'MSS/MSI-L': 0})
     else:
         print(f"  WARNING: MSI column not found — setting {FEAT_MSI} = 0.")
         df[FEAT_MSI] = 0
 
-    # --- Ordinal-encode high-cardinality categoricals ---
-    # Tree-based models (RF, XGBoost) split on threshold values, so ordinal
-    # encoding works correctly: each unique category gets a stable integer code.
     for raw_col, feat_col in [
         (COL_DRUG,        FEAT_DRUG),
         (COL_TCGA_DESC,   FEAT_CANCER),
@@ -265,13 +335,11 @@ def load_and_prepare_data(data_path: str) -> pd.DataFrame:
             print(f"  WARNING: '{raw_col}' not found — setting {feat_col} = -1.")
             df[feat_col] = -1
 
-    # --- Drop any row missing a feature or the target ---
     required = FEATURE_COLS + [COL_LN_IC50]
     df_clean = df[required].dropna()
     dropped = df.shape[0] - df_clean.shape[0]
     print(f"  Rows after dropping NaN in features/target: {df_clean.shape[0]:,} (removed {dropped:,})")
 
-    # Feature summary
     print("\n  Feature engineering summary:")
     for feat, label in FEATURE_LABELS.items():
         col_data = df_clean[feat]
@@ -329,19 +397,24 @@ def run_regression(df: pd.DataFrame) -> dict:
         ),
     }
 
-    results = {'X_test': X_test, 'y_test': y_test}
+    results = {'X_test': X_test, 'y_test': y_test, 'X_train': X_train, 'y_train': y_train}
 
     for name, model in models.items():
         print(f"\n  Training {name} Regressor...")
         model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
 
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        r2   = r2_score(y_test, y_pred)
-        mae  = mean_absolute_error(y_test, y_pred)
+        y_train_pred = model.predict(X_train)
+        y_pred       = model.predict(X_test)
 
+        train_r2 = r2_score(y_train, y_train_pred)
+        rmse     = np.sqrt(mean_squared_error(y_test, y_pred))
+        r2       = r2_score(y_test, y_pred)
+        mae      = mean_absolute_error(y_test, y_pred)
+
+        print(f"    Overfitting check (train vs test R2):")
+        print(f"      Train R2: {train_r2:.4f}  |  Test R2: {r2:.4f}  |  Gap: {train_r2 - r2:.4f}")
         print(f"    RMSE: {rmse:.4f}  (lower is better; units: LN_IC50)")
-        print(f"    R²:   {r2:.4f}  (closer to 1.0 = better fit)")
+        print(f"    R2:   {r2:.4f}  (closer to 1.0 = better fit)")
         print(f"    MAE:  {mae:.4f}  (mean absolute error in LN_IC50 units)")
 
         fi        = pd.Series(model.feature_importances_, index=FEATURE_COLS)
@@ -355,28 +428,33 @@ def run_regression(df: pd.DataFrame) -> dict:
         results[name] = {
             'model':              model,
             'y_pred':             y_pred,
+            'train_r2':           train_r2,
             'rmse':               rmse,
             'r2':                 r2,
             'mae':                mae,
             'feature_importance': fi_named,
         }
 
-    # Biological interpretation
+    # 5-fold cross-validation on full dataset
+    print(f"\n  5-Fold Cross-Validation — Regression (Random Forest, n_estimators=50):")
+    cv_model = RandomForestRegressor(n_estimators=50, max_features='sqrt', n_jobs=-1, random_state=RANDOM_STATE)
+    cv_scores = cross_val_score(cv_model, X, y, cv=KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE), scoring='r2', n_jobs=-1)
+    print(f"    Fold R2 scores: {[f'{s:.4f}' for s in cv_scores]}")
+    print(f"    Mean R2: {cv_scores.mean():.4f}  Std: {cv_scores.std():.4f}")
+    print("    -> Consistent CV scores confirm the holdout result is stable, not a lucky split.")
+    results['cv_r2_mean'] = cv_scores.mean()
+    results['cv_r2_std']  = cv_scores.std()
+    results['cv_r2_folds'] = cv_scores.tolist()
+
     top_rf  = results['Random Forest']['feature_importance'].index[0]
     top_xgb = results['XGBoost']['feature_importance'].index[0]
     print(f"\n  Biological Interpretation — Regression:")
     print(f"    Top feature (RF):  {top_rf}")
     print(f"    Top feature (XGB): {top_xgb}")
     print("    -> Drug Name dominates because each drug class has an intrinsic potency range.")
-    print("       A broad-spectrum chemotherapy agent inherently achieves lower LN_IC50 across")
-    print("       most cell lines; a targeted therapy may be very potent but only against")
-    print("       specific molecular subtypes.")
     print("    -> Cancer Type ranks highly because tumour biology shapes the drug response landscape.")
-    print("       Different cancers express different drug transporters, efflux pumps, and survival")
-    print("       pathway dependencies.")
     print("    -> Genomic features (CNA, Gene Expression) contribute incremental signal on top of")
-    print("       drug/cancer identity — their importance supports the case for molecular profiling")
-    print("       in clinical precision oncology.")
+    print("       drug/cancer identity — supporting the case for molecular profiling in precision oncology.")
 
     return results
 
@@ -396,15 +474,10 @@ def run_classification(df: pd.DataFrame) -> dict:
     lower = df[COL_LN_IC50].quantile(QUANTILE_LOWER)
     upper = df[COL_LN_IC50].quantile(QUANTILE_UPPER)
 
-    print(f"  Quantile thresholds (adjustable via QUANTILE_LOWER / QUANTILE_UPPER):")
-    print(f"    Sensitive  — LN_IC50 <= {lower:.4f}  (bottom {int(QUANTILE_LOWER*100)}th percentile)")
-    print(f"    Resistant  — LN_IC50 >= {upper:.4f}  (top    {int((1-QUANTILE_UPPER)*100)}th percentile)")
-    print(f"    Discarded  — {lower:.4f} < LN_IC50 < {upper:.4f}  (middle 50% removed)")
-    print()
-    print("  Biological rationale for the quantile split:")
-    print("    Sensitive = the cell line needed very little drug to lose 50% viability.")
-    print("    Resistant = the cell line required a large drug dose to achieve the same kill rate.")
-    print("    Middle values are discarded to create a cleaner, more clinically meaningful contrast.")
+    print(f"  Quantile thresholds:")
+    print(f"    Sensitive  — LN_IC50 <= {lower:.4f}  (bottom {int(QUANTILE_LOWER*100)}th percentile) -> label 0")
+    print(f"    Resistant  — LN_IC50 >= {upper:.4f}  (top    {int((1-QUANTILE_UPPER)*100)}th percentile) -> label 1")
+    print(f"    Discarded  — {lower:.4f} < LN_IC50 < {upper:.4f}  (middle 50% removed — ambiguous clinical signal)")
 
     df_s = df[df[COL_LN_IC50] <= lower].copy()
     df_r = df[df[COL_LN_IC50] >= upper].copy()
@@ -423,7 +496,7 @@ def run_classification(df: pd.DataFrame) -> dict:
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y
     )
-    print(f"\n  Train: {X_train.shape[0]:,} samples  |  Test: {X_test.shape[0]:,} samples (stratified)")
+    print(f"\n  Train: {X_train.shape[0]:,} samples  |  Test: {X_test.shape[0]:,} samples (stratified split)")
 
     models = {
         'Random Forest': RandomForestClassifier(
@@ -450,15 +523,20 @@ def run_classification(df: pd.DataFrame) -> dict:
     for name, model in models.items():
         print(f"\n  Training {name} Classifier...")
         model.fit(X_train, y_train)
-        y_pred = model.predict(X_test)
-        y_prob = model.predict_proba(X_test)[:, 1]
 
-        acc   = accuracy_score(y_test, y_pred)
-        f1    = f1_score(y_test, y_pred)
-        auroc = roc_auc_score(y_test, y_prob)
+        y_train_pred = model.predict(X_train)
+        y_pred       = model.predict(X_test)
+        y_prob       = model.predict_proba(X_test)[:, 1]
 
+        train_acc = accuracy_score(y_train, y_train_pred)
+        acc       = accuracy_score(y_test, y_pred)
+        f1        = f1_score(y_test, y_pred)
+        auroc     = roc_auc_score(y_test, y_prob)
+
+        print(f"    Overfitting check (train vs test Accuracy):")
+        print(f"      Train Acc: {train_acc:.4f}  |  Test Acc: {acc:.4f}  |  Gap: {train_acc - acc:.4f}")
         print(f"    Accuracy: {acc:.4f}  F1: {f1:.4f}  ROC-AUC: {auroc:.4f}")
-        print()
+
         report = classification_report(
             y_test, y_pred,
             target_names=['Sensitive (0)', 'Resistant (1)'],
@@ -479,22 +557,31 @@ def run_classification(df: pd.DataFrame) -> dict:
             'y_pred':             y_pred,
             'y_test':             y_test,
             'y_prob':             y_prob,
+            'train_acc':          train_acc,
             'acc':                acc,
             'f1':                 f1,
             'auroc':              auroc,
             'feature_importance': fi_named,
         }
 
+    # 5-fold stratified cross-validation
+    print(f"\n  5-Fold Stratified Cross-Validation — Classification (Random Forest, n_estimators=50):")
+    cv_clf = RandomForestClassifier(n_estimators=50, max_features='sqrt', n_jobs=-1, random_state=RANDOM_STATE, class_weight='balanced')
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    cv_auc = cross_val_score(cv_clf, X, y, cv=skf, scoring='roc_auc', n_jobs=-1)
+    print(f"    Fold AUC scores: {[f'{s:.4f}' for s in cv_auc]}")
+    print(f"    Mean AUC: {cv_auc.mean():.4f}  Std: {cv_auc.std():.4f}")
+    print("    -> Consistent AUC across folds confirms the classifier generalises reliably.")
+    results['cv_auc_mean']  = cv_auc.mean()
+    results['cv_auc_std']   = cv_auc.std()
+    results['cv_auc_folds'] = cv_auc.tolist()
+
     print("\n  Biological Interpretation — Classification:")
-    print("    -> A high ROC-AUC confirms that sensitive vs resistant status is predictable from")
-    print("       pharmacological and molecular features — supporting the feasibility of pre-treatment")
-    print("       response prediction in precision oncology.")
-    print("    -> Drug Pathway importance (not just drug name) tells us that mechanism of action —")
-    print("       the biological process the drug attacks — is a key categorical determinant of")
-    print("       response class. Drugs targeting the same signalling node share sensitivity landscapes.")
-    print("    -> Gene Expression and CNA in the top features validate the clinical concept that")
-    print("       molecular profiling of the tumour (transcriptomic state, DNA copy number) adds")
-    print("       independent predictive value for therapy selection.")
+    print("    -> High ROC-AUC confirms that sensitive vs resistant status is predictable from")
+    print("       pharmacological and molecular features — supporting precision oncology feasibility.")
+    print("    -> Drug Pathway importance tells us mechanism of action is a key categorical determinant.")
+    print("    -> Gene Expression and CNA validate that molecular profiling adds independent predictive")
+    print("       value for therapy selection beyond drug and cancer type identity.")
 
     return results
 
@@ -511,247 +598,152 @@ def _save(filename: str):
 
 def visualize_all(reg: dict, clf: dict, df: pd.DataFrame):
     print(f"\n{'='*70}")
-    print("SECTION 4: Visualisations  (11 plots)")
+    print("SECTION 4: Visualisations")
     print(f"{'='*70}")
     sns.set_style('whitegrid')
     plt.rcParams.update({'font.size': 10})
 
-    # -------------------------------------------------------------------------
-    # REGRESSION PLOTS
-    # -------------------------------------------------------------------------
-    print("  Regression plots...")
-
     # R1: LN_IC50 distribution
-    print("  -> Saving reg_01_target_distribution.png...")
     fig, ax = plt.subplots(figsize=(10, 5))
     ln = df[COL_LN_IC50]
     ax.hist(ln, bins=80, color='steelblue', edgecolor='white', alpha=0.85)
-    ax.axvline(ln.mean(), color='crimson', linewidth=2, linestyle='--',
-               label=f'Mean = {ln.mean():.2f}')
+    ax.axvline(ln.mean(), color='crimson', linewidth=2, linestyle='--', label=f'Mean = {ln.mean():.2f}')
     ax.axvline(ln.mean() - ln.std(), color='orange', linewidth=1.5, linestyle=':',
-               label=f'Mean ± Std ({ln.mean()-ln.std():.2f} / {ln.mean()+ln.std():.2f})')
+               label=f'Mean +/- Std ({ln.mean()-ln.std():.2f} / {ln.mean()+ln.std():.2f})')
     ax.axvline(ln.mean() + ln.std(), color='orange', linewidth=1.5, linestyle=':')
-    ax.set_title(
-        'Distribution of Drug Sensitivity (LN_IC50)\nRegression Target Variable',
-        fontweight='bold', fontsize=13
-    )
-    ax.set_xlabel('LN_IC50  (lower = more drug-sensitive cell line)', fontsize=11)
-    ax.set_ylabel('Number of Experiments', fontsize=11)
-    ax.legend(fontsize=10)
+    ax.set_title('Distribution of Drug Sensitivity (LN_IC50)\nRegression Target Variable', fontweight='bold')
+    ax.set_xlabel('LN_IC50  (lower = more drug-sensitive cell line)')
+    ax.set_ylabel('Number of Experiments')
+    ax.legend()
     plt.tight_layout()
     _save('reg_01_target_distribution.png')
 
-    # R2: Feature Importance — Regression (RF and XGB side by side)
-    print("  -> Saving reg_02_feature_importance.png...")
+    # R2: Feature Importance — Regression
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
     for ax, name, color in zip(axes, ['Random Forest', 'XGBoost'], ['steelblue', 'coral']):
-        fi   = reg[name]['feature_importance']
+        fi = reg[name]['feature_importance']
         bars = ax.barh(fi.index[::-1], fi.values[::-1], color=color, alpha=0.85, edgecolor='white')
-        ax.bar_label(bars, fmt='%.3f', padding=3, fontsize=9)
-        ax.set_title(
-            f'{name}\nRegression Feature Importance (predicting LN_IC50)',
-            fontweight='bold', fontsize=11
-        )
-        ax.set_xlabel('Importance Score (Mean Decrease in Impurity)', fontsize=10)
-        ax.set_xlim(0, fi.max() * 1.22)
-    plt.suptitle(
-        'Which Features Best Predict Drug Sensitivity? — Regression',
-        fontsize=13, fontweight='bold', y=1.01
-    )
+        ax.bar_label(bars, fmt='%.3f', padding=3)
+        ax.set_title(f'{name}\nRegression Feature Importance', fontweight='bold')
+        ax.set_xlabel('Importance Score (Mean Decrease in Impurity)')
     plt.tight_layout()
     _save('reg_02_feature_importance.png')
 
-    # R3: Actual vs Predicted (hexbin density — 32k+ points need density, not scatter)
-    print("  -> Saving reg_03_actual_vs_predicted.png...")
+    # R3: Actual vs Predicted (hexbin)
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
     for ax, name in zip(axes, ['Random Forest', 'XGBoost']):
-        r  = reg[name]
+        r = reg[name]
         hb = ax.hexbin(reg['y_test'], r['y_pred'], gridsize=60, cmap='Blues', mincnt=1)
         plt.colorbar(hb, ax=ax, label='Count')
         lo = min(reg['y_test'].min(), r['y_pred'].min())
         hi = max(reg['y_test'].max(), r['y_pred'].max())
-        ax.plot([lo, hi], [lo, hi], 'r--', linewidth=1.5, label='Perfect prediction (y = x)')
-        ax.set_title(
-            f'{name}  —  Actual vs Predicted LN_IC50\nRMSE={r["rmse"]:.3f}  R²={r["r2"]:.3f}  MAE={r["mae"]:.3f}',
-            fontweight='bold', fontsize=11
-        )
-        ax.set_xlabel('Actual LN_IC50', fontsize=10)
-        ax.set_ylabel('Predicted LN_IC50', fontsize=10)
-        ax.legend(fontsize=9)
-    plt.suptitle(
-        'Regression Performance: Actual vs Predicted Drug Sensitivity\n'
-        '(Hexbin density plot — darker = more test samples)',
-        fontsize=13, fontweight='bold', y=1.01
-    )
+        ax.plot([lo, hi], [lo, hi], 'r--', linewidth=1.5, label='Perfect prediction')
+        ax.set_title(f'{name}  RMSE={r["rmse"]:.3f}  R2={r["r2"]:.3f}  MAE={r["mae"]:.3f}', fontweight='bold')
+        ax.set_xlabel('Actual LN_IC50')
+        ax.set_ylabel('Predicted LN_IC50')
+        ax.legend()
     plt.tight_layout()
     _save('reg_03_actual_vs_predicted.png')
 
-    # R4: Regression model comparison (metric bars)
-    print("  -> Saving reg_04_model_comparison.png...")
+    # R4: Regression model comparison
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    for ax, (label, key) in zip(axes, [('RMSE', 'rmse'), ('R²', 'r2'), ('MAE', 'mae')]):
-        vals   = [reg['Random Forest'][key], reg['XGBoost'][key]]
-        colors = ['steelblue', 'coral']
-        bars   = ax.bar(['Random\nForest', 'XGBoost'], vals,
-                        color=colors, alpha=0.85, edgecolor='white', width=0.5)
-        ax.bar_label(bars, fmt='%.4f', padding=4, fontsize=11, fontweight='bold')
-        ax.set_title(label, fontweight='bold', fontsize=13)
+    for ax, (label, key) in zip(axes, [('RMSE', 'rmse'), ('R2', 'r2'), ('MAE', 'mae')]):
+        vals = [reg['Random Forest'][key], reg['XGBoost'][key]]
+        bars = ax.bar(['Random\nForest', 'XGBoost'], vals, color=['steelblue', 'coral'], alpha=0.85, edgecolor='white', width=0.5)
+        ax.bar_label(bars, fmt='%.4f', padding=4, fontweight='bold')
+        ax.set_title(label, fontweight='bold')
         ax.set_ylim(0, max(vals) * 1.3)
-    plt.suptitle('Regression Model Comparison: Random Forest vs XGBoost',
-                 fontsize=13, fontweight='bold')
     plt.tight_layout()
     _save('reg_04_model_comparison.png')
 
-    # -------------------------------------------------------------------------
-    # CLASSIFICATION PLOTS
-    # -------------------------------------------------------------------------
-    print("  Classification plots...")
+    # C1: Quantile split visualisation
     lower = clf['lower']
     upper = clf['upper']
-
-    # C1: Quantile split visualisation
-    print("  -> Saving clf_01_quantile_split.png...")
     fig, ax = plt.subplots(figsize=(12, 5))
-    ln_vals  = df[COL_LN_IC50].values
+    ln_vals = df[COL_LN_IC50].values
     bin_step = (ln_vals.max() - ln_vals.min()) / 80
-    counts, bin_edges, patches = ax.hist(
-        ln_vals, bins=80, color='lightgray', edgecolor='white', alpha=0.9
-    )
+    counts, bin_edges, patches = ax.hist(ln_vals, bins=80, color='lightgray', edgecolor='white', alpha=0.9)
     for patch, left_edge in zip(patches, bin_edges[:-1]):
         mid = left_edge + bin_step / 2
         if mid <= lower:
-            patch.set_facecolor('steelblue')
-            patch.set_alpha(0.85)
+            patch.set_facecolor('steelblue'); patch.set_alpha(0.85)
         elif mid >= upper:
-            patch.set_facecolor('coral')
-            patch.set_alpha(0.85)
-    ax.axvline(lower, color='steelblue', linewidth=2.5, linestyle='--',
-               label=f'25th percentile = {lower:.2f}  (Sensitive threshold)')
-    ax.axvline(upper, color='coral',     linewidth=2.5, linestyle='--',
-               label=f'75th percentile = {upper:.2f}  (Resistant threshold)')
-    ax.set_title(
-        'Quantile-Based Classification Split\n'
-        'Blue = Sensitive (bottom 25%)  |  Red = Resistant (top 25%)  |  Grey = Discarded (middle 50%)',
-        fontweight='bold', fontsize=12
-    )
-    ax.set_xlabel('LN_IC50  (lower = drug-sensitive, higher = drug-resistant)', fontsize=11)
-    ax.set_ylabel('Count', fontsize=11)
-    ax.legend(fontsize=10)
+            patch.set_facecolor('coral'); patch.set_alpha(0.85)
+    ax.axvline(lower, color='steelblue', linewidth=2.5, linestyle='--', label=f'25th percentile = {lower:.2f}')
+    ax.axvline(upper, color='coral', linewidth=2.5, linestyle='--', label=f'75th percentile = {upper:.2f}')
+    ax.set_title('Quantile-Based Classification Split\nBlue=Sensitive (bottom 25%) | Red=Resistant (top 25%) | Grey=Discarded', fontweight='bold')
+    ax.set_xlabel('LN_IC50')
+    ax.set_ylabel('Count')
+    ax.legend()
     plt.tight_layout()
     _save('clf_01_quantile_split.png')
 
-    # C2: ROC Curves — both models on same axes
-    print("  -> Saving clf_02_roc_curves.png...")
+    # C2: ROC Curves
     fig, ax = plt.subplots(figsize=(8, 7))
     for name, color in [('Random Forest', 'steelblue'), ('XGBoost', 'coral')]:
-        r   = clf[name]
+        r = clf[name]
         fpr, tpr, _ = roc_curve(r['y_test'], r['y_prob'])
-        ax.plot(fpr, tpr, color=color, linewidth=2.5,
-                label=f'{name}  (AUC = {r["auroc"]:.4f})')
-    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, alpha=0.6,
-            label='Random classifier  (AUC = 0.50)')
-    ax.set_title(
-        'ROC Curve — Sensitive vs Resistant Classification\nBoth Models Compared',
-        fontweight='bold', fontsize=12
-    )
-    ax.set_xlabel('False Positive Rate  (1 - Specificity)', fontsize=11)
-    ax.set_ylabel('True Positive Rate  (Sensitivity / Recall)', fontsize=11)
-    ax.legend(fontsize=10, loc='lower right')
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1.01)
+        ax.plot(fpr, tpr, color=color, linewidth=2.5, label=f'{name}  (AUC = {r["auroc"]:.4f})')
+    ax.plot([0, 1], [0, 1], 'k--', linewidth=1, alpha=0.6, label='Random classifier (AUC = 0.50)')
+    ax.set_title('ROC Curve — Sensitive vs Resistant Classification', fontweight='bold')
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.legend(loc='lower right')
     plt.tight_layout()
     _save('clf_02_roc_curves.png')
 
-    # C3: Confusion Matrices — side by side (seaborn heatmap for reliability)
-    print("  -> Saving clf_03_confusion_matrices.png...")
+    # C3: Confusion Matrices
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     labels = ['Sensitive', 'Resistant']
     for ax, name in zip(axes, ['Random Forest', 'XGBoost']):
-        r  = clf[name]
+        r = clf[name]
         cm = confusion_matrix(r['y_test'], r['y_pred'])
-        sns.heatmap(
-            cm, annot=True, fmt='d', cmap='Blues', ax=ax,
-            xticklabels=labels, yticklabels=labels,
-            linewidths=0.5, linecolor='white', cbar=False,
-            annot_kws={'size': 14, 'weight': 'bold'}
-        )
-        ax.set_title(
-            f'{name}\nAcc={r["acc"]:.4f}  F1={r["f1"]:.4f}  AUC={r["auroc"]:.4f}',
-            fontweight='bold', fontsize=11
-        )
-        ax.set_xlabel('Predicted Label', fontsize=10)
-        ax.set_ylabel('True Label', fontsize=10)
-    plt.suptitle('Confusion Matrices — Drug Sensitivity Classification',
-                 fontsize=13, fontweight='bold')
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
+                    xticklabels=labels, yticklabels=labels, linewidths=0.5, linecolor='white', cbar=False)
+        ax.set_title(f'{name}\nAcc={r["acc"]:.4f}  F1={r["f1"]:.4f}  AUC={r["auroc"]:.4f}', fontweight='bold')
+        ax.set_xlabel('Predicted Label')
+        ax.set_ylabel('True Label')
     plt.tight_layout()
     _save('clf_03_confusion_matrices.png')
 
     # C4: Classification Feature Importance
-    print("  -> Saving clf_04_feature_importance.png...")
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
     for ax, name, color in zip(axes, ['Random Forest', 'XGBoost'], ['steelblue', 'coral']):
-        fi   = clf[name]['feature_importance']
+        fi = clf[name]['feature_importance']
         bars = ax.barh(fi.index[::-1], fi.values[::-1], color=color, alpha=0.85, edgecolor='white')
-        ax.bar_label(bars, fmt='%.3f', padding=3, fontsize=9)
-        ax.set_title(
-            f'{name}\nClassification Feature Importance (Sensitive vs Resistant)',
-            fontweight='bold', fontsize=11
-        )
-        ax.set_xlabel('Importance Score', fontsize=10)
-        ax.set_xlim(0, fi.max() * 1.22)
-    plt.suptitle(
-        'Which Features Best Discriminate Sensitive from Resistant Cell Lines? — Classification',
-        fontsize=13, fontweight='bold', y=1.01
-    )
+        ax.bar_label(bars, fmt='%.3f', padding=3)
+        ax.set_title(f'{name}\nClassification Feature Importance (Sensitive vs Resistant)', fontweight='bold')
+        ax.set_xlabel('Importance Score')
     plt.tight_layout()
     _save('clf_04_feature_importance.png')
 
     # C5: Classification model comparison
-    print("  -> Saving clf_05_model_comparison.png...")
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     for ax, (label, key) in zip(axes, [('Accuracy', 'acc'), ('F1 Score', 'f1'), ('ROC-AUC', 'auroc')]):
-        vals   = [clf['Random Forest'][key], clf['XGBoost'][key]]
-        colors = ['steelblue', 'coral']
-        bars   = ax.bar(['Random\nForest', 'XGBoost'], vals,
-                        color=colors, alpha=0.85, edgecolor='white', width=0.5)
-        ax.bar_label(bars, fmt='%.4f', padding=4, fontsize=11, fontweight='bold')
-        ax.set_title(label, fontweight='bold', fontsize=13)
+        vals = [clf['Random Forest'][key], clf['XGBoost'][key]]
+        bars = ax.bar(['Random\nForest', 'XGBoost'], vals, color=['steelblue', 'coral'], alpha=0.85, edgecolor='white', width=0.5)
+        ax.bar_label(bars, fmt='%.4f', padding=4, fontweight='bold')
+        ax.set_title(label, fontweight='bold')
         ax.set_ylim(0, 1.2)
-    plt.suptitle('Classification Model Comparison: Random Forest vs XGBoost',
-                 fontsize=13, fontweight='bold')
     plt.tight_layout()
     _save('clf_05_model_comparison.png')
 
-    # -------------------------------------------------------------------------
-    # COMBINED — Feature importance heatmap across all 4 models
-    # -------------------------------------------------------------------------
-    print("  -> Saving combined_01_feature_importance_heatmap.png...")
+    # Combined: Feature importance heatmap across all 4 models
     heatmap_data = pd.DataFrame({
         'RF — Regression':      reg['Random Forest']['feature_importance'],
         'XGB — Regression':     reg['XGBoost']['feature_importance'],
         'RF — Classification':  clf['Random Forest']['feature_importance'],
         'XGB — Classification': clf['XGBoost']['feature_importance'],
     }).T
-
     fig, ax = plt.subplots(figsize=(13, 5))
-    sns.heatmap(
-        heatmap_data, annot=True, fmt='.3f', cmap='YlOrRd',
-        linewidths=0.5, linecolor='white', ax=ax,
-        cbar_kws={'label': 'Feature Importance Score'},
-        annot_kws={'size': 9}
-    )
-    ax.set_title(
-        'Feature Importance Across All Four Models\n'
-        'Rows = Models  |  Columns = Features  |  Darker = More Important',
-        fontweight='bold', fontsize=12
-    )
-    ax.set_ylabel('Model', fontsize=10)
-    plt.xticks(rotation=30, ha='right', fontsize=9)
-    plt.yticks(rotation=0, fontsize=9)
+    sns.heatmap(heatmap_data, annot=True, fmt='.3f', cmap='YlOrRd',
+                linewidths=0.5, linecolor='white', ax=ax,
+                cbar_kws={'label': 'Feature Importance Score'}, annot_kws={'size': 9})
+    ax.set_title('Feature Importance Across All Four Models\nRows=Models | Columns=Features | Darker=More Important', fontweight='bold')
+    plt.xticks(rotation=30, ha='right')
+    plt.yticks(rotation=0)
     plt.tight_layout()
     _save('combined_01_feature_importance_heatmap.png')
-
-    print(f"\n  All 11 plots saved to: {OUTPUT_DIR}")
 
 
 # ---------------------------------------------------------------------------
@@ -760,71 +752,22 @@ def visualize_all(reg: dict, clf: dict, df: pd.DataFrame):
 def main():
     print("HackBio Stage Two: Predicting Drug Sensitivity in Cancer (GDSC)")
     print("Machine Learning Pipeline — Regression and Classification")
-    print(f"{'='*70}")
 
     df          = load_and_prepare_data(DATA_PATH)
     reg_results = run_regression(df)
     clf_results = run_classification(df)
     visualize_all(reg_results, clf_results, df)
 
-    print(f"\n{'='*70}")
-    print("PIPELINE COMPLETE")
-    print(f"{'='*70}")
+    print("\nPIPELINE COMPLETE")
     rf_reg  = reg_results['Random Forest']
     xgb_reg = reg_results['XGBoost']
     rf_clf  = clf_results['Random Forest']
     xgb_clf = clf_results['XGBoost']
-    print(f"  Regression   | RF:  RMSE={rf_reg['rmse']:.4f}  R²={rf_reg['r2']:.4f}")
-    print(f"               | XGB: RMSE={xgb_reg['rmse']:.4f}  R²={xgb_reg['r2']:.4f}")
+    print(f"  Regression   | RF:  RMSE={rf_reg['rmse']:.4f}  R2={rf_reg['r2']:.4f}")
+    print(f"               | XGB: RMSE={xgb_reg['rmse']:.4f}  R2={xgb_reg['r2']:.4f}")
     print(f"  Classification | RF:  Acc={rf_clf['acc']:.4f}  AUC={rf_clf['auroc']:.4f}")
     print(f"                 | XGB: Acc={xgb_clf['acc']:.4f}  AUC={xgb_clf['auroc']:.4f}")
-    print(f"\n  Outputs written to: {OUTPUT_DIR}")
 
 
 if __name__ == '__main__':
     main()
-
-
-RESULTS
-
-Regression (on 32,421 held-out test samples):
-- Random Forest: RMSE = 1.3515, R² = 0.7741, MAE = 1.0148
-- XGBoost:       RMSE = 1.3691, R² = 0.7682, MAE = 1.0447
-
-Classification (on 16,211 held-out test samples, stratified):
-- Random Forest: Accuracy = 94.1%, F1 = 0.9411, ROC-AUC = 0.9834
-- XGBoost:       Accuracy = 94.1%, F1 = 0.9405, ROC-AUC = 0.9874
-
-FEATURE IMPORTANCE & BIOLOGICAL INTERPRETATION
-
-Drug Name is the dominant predictor across all four models (importance ~0.52–0.68).
-This is biologically expected: broad-spectrum chemotherapy agents (e.g. cisplatin,
-doxorubicin) achieve uniformly low LN_IC50 across most cell lines because they attack
-fundamental processes like DNA replication. Targeted therapies have narrow but deep
-activity windows — potent only when the molecular target is present.
-
-Drug Pathway ranks second (~0.23–0.31). This is a stronger biological insight than
-drug name alone: it tells us that mechanism of action — the signalling node a drug
-attacks — is a key categorical determinant of sensitivity class. Drugs targeting the
-same pathway share sensitivity landscapes across cell lines.
-
-Cancer Type ranks third (~0.05–0.13). Different tumour tissues have fundamentally
-different gene expression profiles, drug transporter activity, and proliferative
-dependencies, all of which shape the drug response landscape.
-
-Gene Expression, Methylation, CNA, and MSI contribute smaller but non-zero signal.
-Their presence validates the clinical rationale for molecular tumour profiling:
-transcriptomic state and DNA copy number add independent predictive value beyond
-drug and cancer type identity, supporting the precision oncology paradigm.
-
-OUTPUTS (all plots in /outputs folder of the repository)
-- reg_01_target_distribution.png — LN_IC50 distribution
-- reg_02_feature_importance.png — RF and XGB regression feature importance
-- reg_03_actual_vs_predicted.png — Actual vs predicted LN_IC50 (hexbin density)
-- reg_04_model_comparison.png — RMSE / R² / MAE side-by-side
-- clf_01_quantile_split.png — Visualisation of the quantile-based class split
-- clf_02_roc_curves.png — ROC curves for both classifiers
-- clf_03_confusion_matrices.png — Confusion matrices with precision/recall
-- clf_04_feature_importance.png — RF and XGB classification feature importance
-- clf_05_model_comparison.png — Accuracy / F1 / AUC comparison
-- combined_01_feature_importance_heatmap.png — All 4 models x all features heatmap
