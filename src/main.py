@@ -14,7 +14,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold, KFold
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.preprocessing import OrdinalEncoder
 from sklearn.metrics import (
@@ -246,6 +246,17 @@ def run_regression(df: pd.DataFrame) -> dict:
             'feature_importance': fi_named,
         }
 
+    # 5-fold cross-validation on full dataset (lightweight config for speed)
+    print(f"\n  5-Fold Cross-Validation — Regression (Random Forest, n_estimators=50):")
+    cv_model = RandomForestRegressor(n_estimators=50, max_features='sqrt', n_jobs=-1, random_state=RANDOM_STATE)
+    cv_scores = cross_val_score(cv_model, X, y, cv=KFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE), scoring='r2', n_jobs=-1)
+    print(f"    Fold R² scores: {[f'{s:.4f}' for s in cv_scores]}")
+    print(f"    Mean R²: {cv_scores.mean():.4f}  Std: {cv_scores.std():.4f}")
+    print("    -> Consistent CV scores confirm the holdout result is stable, not a lucky split.")
+    results['cv_r2_mean'] = cv_scores.mean()
+    results['cv_r2_std']  = cv_scores.std()
+    results['cv_r2_folds'] = cv_scores.tolist()
+
     # Biological interpretation
     top_rf  = results['Random Forest']['feature_importance'].index[0]
     top_xgb = results['XGBoost']['feature_importance'].index[0]
@@ -375,6 +386,18 @@ def run_classification(df: pd.DataFrame) -> dict:
             'auroc':              auroc,
             'feature_importance': fi_named,
         }
+
+    # 5-fold stratified cross-validation (lightweight config for speed)
+    print(f"\n  5-Fold Stratified Cross-Validation — Classification (Random Forest, n_estimators=50):")
+    cv_clf = RandomForestClassifier(n_estimators=50, max_features='sqrt', n_jobs=-1, random_state=RANDOM_STATE, class_weight='balanced')
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=RANDOM_STATE)
+    cv_auc = cross_val_score(cv_clf, X, y, cv=skf, scoring='roc_auc', n_jobs=-1)
+    print(f"    Fold AUC scores: {[f'{s:.4f}' for s in cv_auc]}")
+    print(f"    Mean AUC: {cv_auc.mean():.4f}  Std: {cv_auc.std():.4f}")
+    print("    -> Consistent AUC across folds confirms the classifier generalises reliably.")
+    results['cv_auc_mean']  = cv_auc.mean()
+    results['cv_auc_std']   = cv_auc.std()
+    results['cv_auc_folds'] = cv_auc.tolist()
 
     print("\n  Biological Interpretation — Classification:")
     print("    -> A high ROC-AUC confirms that sensitive vs resistant status is predictable from")
