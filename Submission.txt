@@ -12,23 +12,37 @@ a classification task.
 
 DATASET LOADING AND TARGET VARIABLE
 
-Loading code:
+Step 1 — Load dataset:
   df = pd.read_excel("GDSC.xlsx")
-  # Shape: (162,103 rows x 19 columns)
-  # Key columns: DRUG_NAME, TCGA_DESC, LN_IC50, AUC, Z_SCORE, CNA,
-  #              Gene Expression, Methylation, MSI, TARGET_PATHWAY
+  print(df.shape)    # (162103, 19)
+  print(df.columns)  # ['DATASET', 'NLME_RESULT_ID', 'NLME_CURVE_ID', 'COSMIC_ID',
+                     #  'CELL_LINE_NAME', 'SANGER_MODEL_ID', 'TCGA_DESC', 'DRUG_ID',
+                     #  'DRUG_NAME', 'PUTATIVE_TARGET', 'PATHWAY_NAME', 'MIN_CONC',
+                     #  'MAX_CONC', 'LN_IC50', 'AUC', 'RMSE', 'Z_SCORE',
+                     #  'TARGET_PATHWAY', 'CNA', 'Gene Expression', 'Methylation',
+                     #  'Microsatellite instability Status (MSI)']
 
-Target variable identification:
-  y = df["LN_IC50"]   # <-- prediction target
-  X = df[feature_cols]  # 7 pharmacological and genomic features
+Step 2 — Identify prediction target:
+  TARGET VARIABLE: LN_IC50
+  Confirmed present in dataset: True
+  Type: continuous numeric — natural logarithm of IC50
+  NaN count: 0 (no missing values in target)
+  Statistics: Mean=2.8226  Std=2.8362  Min=-8.6426  Max=13.8202
+
+  y = df["LN_IC50"]   # regression target — predict continuous drug sensitivity
+                       # also used to derive Sensitive/Resistant labels for classification
+
+Step 3 — Define features and target arrays:
+  X = df[feature_cols]   # shape (162103, 7) — 7 pharmacological and genomic features
+  y = df["LN_IC50"]      # shape (162103,)   — prediction target
 
 LN_IC50 is the natural logarithm of IC50 — the drug concentration required to reduce
 cancer cell viability by 50%. The log transform is applied because raw IC50 values
 span many orders of magnitude; the log scale produces a roughly normal distribution
-(Mean=2.82, Std=2.84, Min=-8.64, Max=13.82) that is appropriate for regression.
+appropriate for regression modelling.
 
 No rows were dropped — all 162,103 experiments had complete values for both features
-and the target (0 NaN removed).
+and the LN_IC50 target (0 NaN removed after feature engineering).
 
 APPROACH
 

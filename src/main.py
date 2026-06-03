@@ -106,6 +106,14 @@ def load_and_prepare_data(data_path: str) -> pd.DataFrame:
         sys.exit(1)
 
     print(f"  Raw dataset: {df.shape[0]:,} rows x {df.shape[1]} columns")
+    print(f"  Columns: {df.columns.tolist()}")
+    print(f"\n  TARGET VARIABLE IDENTIFIED: {COL_LN_IC50}")
+    print(f"    Confirmed present in dataset: {COL_LN_IC50 in df.columns}")
+    print(f"    Type: continuous numeric (natural log of IC50)")
+    print(f"    Used as: regression target (direct) + classification labels (quantile split)")
+    ln_raw = df[COL_LN_IC50]
+    print(f"    Statistics: Mean={ln_raw.mean():.4f}  Std={ln_raw.std():.4f}  "
+          f"Min={ln_raw.min():.4f}  Max={ln_raw.max():.4f}  NaN={ln_raw.isna().sum()}")
 
     # --- Binary genomic features: Y -> 1, N -> 0 ---
     # CNA: copy number alteration present in the cell line's DNA
